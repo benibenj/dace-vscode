@@ -17,12 +17,16 @@ export class DaCeVSCode {
 
     private context: vscode.ExtensionContext | undefined = undefined;
 
-    public init(context: vscode.ExtensionContext) {
+    public async init(context: vscode.ExtensionContext) {
         this.context = context;
 
         // Connect to DaCe.
         const daceInterface = DaCeInterface.getInstance();
-        daceInterface.start();
+        await daceInterface.start(
+            vscode.workspace.getConfiguration().get<boolean>(
+                'dace.interface.daemonMode', false
+            )
+        );
 
         // Create and register the transformations view.
         const transformationsProvider = TransformationsProvider.getInstance();

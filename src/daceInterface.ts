@@ -23,6 +23,10 @@ export class DaCeInterface {
         return this.INSTANCE;
     }
 
+    private pythonPath: string = 'python';
+
+    private daemonMode = false;
+    private daemonPort = 5000;
     private daemonFound = false;
 
     private activeSdfgFileName: string | undefined = undefined;
@@ -65,23 +69,110 @@ export class DaCeInterface {
         return this.activeEditor;
     }
 
-    private async startPythonDaemon() {
+    private defaultDaCeCallback(output: string) {
+        console.log(output);
+    }
+
+    private async runDaCeAlt(
+        args: string[],
+        callback: CallableFunction,
+        errorCallback?: CallableFunction
+    ) {
+        const daceArgs = [
+            '-m',
+            'dace.transformation.interface.vscode'
+        ].concat(args);
+        const dace = cp.spawnSync(this.pythonPath, daceArgs);
+
+        let daceOutputBuffer = '';
+        let daceErrorBuffer = '';
+
+        if (dace.error)
+            daceErrorBuffer += dace.error;
+
+        if (dace.stderr)
+            daceErrorBuffer += dace.stderr;
+
+        if (dace.stdout)
+            daceOutputBuffer += dace.stdout;
+        
+        if ((dace.status && dace.status > 0) || daceErrorBuffer.length > 0) {
+            const exitCode = dace.status ? dace.status : 1;
+            if (errorCallback) {
+                errorCallback(exitCode, daceErrorBuffer);
+            } else {
+                console.error('DaCe finished with error code ' + exitCode);
+                console.error(daceErrorBuffer);
+                console.log(daceOutputBuffer);
+            }
+        } else {
+            callback(daceOutputBuffer);
+        }
+    }
+
+    private runDaCe(
+        args: string[],
+        callback: CallableFunction,
+        errorCallback?: CallableFunction
+    ) {
+        const daceArgs = [
+            '-m',
+            'dace.transformation.interface.vscode'
+        ].concat(args);
+        const dace = cp.spawn(this.pythonPath, daceArgs);
+
+        let daceOutputBuffer = '';
+        let daceErrorBuffer = '';
+
+        dace.stdout.setEncoding('utf8');
+        dace.stdout.on('data', data => {
+            daceOutputBuffer += data.toString();
+        });
+
+        dace.stderr.setEncoding('utf8');
+        dace.stderr.on('data', data => {
+            daceErrorBuffer += data.toString();
+        });
+
+        dace.on('close', code => {
+            if (code > 0 || daceErrorBuffer.length > 0) {
+                if (errorCallback) {
+                    errorCallback(code, daceErrorBuffer);
+                } else {
+                    console.error('DaCe finished with error code ' + code);
+                    console.error(daceErrorBuffer);
+                }
+            } else {
+                callback(daceOutputBuffer);
+            }
+        });
+    }
+
+    private startPythonDaemon() {
         if (this.daemonFound)
             return;
 
-        const pythonPath = await this.getPythonPath(null);
         const daemon = cp.spawn(
-            pythonPath,
-            ['-m', 'dace.transformation.interface.vscode']
+            this.pythonPath,
+            [
+                '-m',
+                'dace.transformation.interface.vscode',
+                '-p',
+                this.daemonPort.toString()
+            ]
         );
 
-        // TODO: Randomize port choice.
+        // TODO: Do actual error handling.
+        daemon.stderr.on('data', (data) => {
+            console.log(data.toString());
+        });
+
         // We poll the daemon every second to see if it's awake.
         const connectionIntervalId = setInterval(() => {
             console.log('Checking for daemon');
             const req = request({
                 host: 'localhost',
-                port: 5000,
+                port: this.daemonPort,
                 path: '/',
                 method: 'GET',
                 timeout: 1000,
@@ -124,7 +215,7 @@ export class DaCeInterface {
         const postData = JSON.stringify(requestData);
         const req = request({
             host: 'localhost',
-            port: 5000,
+            port: this.daemonPort,
             path: url,
             method: 'POST',
             headers: {
@@ -155,8 +246,17 @@ export class DaCeInterface {
         req.end();
     }
 
-    public start() {
-        this.startPythonDaemon();
+    public async start(daemonMode: boolean) {
+        this.pythonPath = await this.getPythonPath(null);
+
+        this.daemonMode = daemonMode;
+
+        if (this.daemonMode) {
+            this.startPythonDaemon();
+        } else {
+            TransformationsProvider.getInstance().refresh();
+            TransformationHistoryProvider.getInstance().refresh();
+        }
     }
 
     public previewSdfg(sdfg: any) {
@@ -350,13 +450,19 @@ export class DaCeInterface {
             daceInterface.hideSpinner();
         }
 
-        this.sendPostRequest(
-            '/transformations',
-            {
-                'sdfg': sdfg,
-            },
-            callback
-        );
+        if (this.daemonMode) {
+            this.sendPostRequest(
+                '/transformations',
+                {
+                    'sdfg': sdfg,
+                },
+                callback
+            );
+        } else {
+            const fileName = this.getActiveSdfgFileName();
+            if (fileName)
+                this.runDaCeAlt(['-t', fileName], callback);
+        }
     }
 
     public updateActiveSdfg(activeSdfgFileName: string,

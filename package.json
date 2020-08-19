@@ -25,6 +25,19 @@
     },
     "icon": "icon.png",
     "contributes": {
+        "configuration": [
+            {
+                "title": "DaCe SDFG Viewer (SDFV)",
+                "properties": {
+                    "dace.interface.daemonMode": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Run the DaCe backend in daemon mode",
+                        "scope": "machine-overridable"
+                    }
+                }
+            }
+        ],
         "languages": [
             {
                 "id": "sdfg",
